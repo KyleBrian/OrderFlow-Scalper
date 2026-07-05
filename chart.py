@@ -33,14 +33,14 @@ from typing import List, Optional
 import numpy as np
 import pandas as pd
 
-from . import config
-from .mt5_connector import MT5Connector
-from .data_puller import DataPuller
-from .volume_profile import build_volume_profile, VolumeProfile
-from .key_levels import KeyLevelBuilder, KeyLevels
-from .footprint import FootprintBuilder, FootprintBar
-from .delta import DeltaEngine, DeltaBar
-from .signals import SignalDetector, Signal, SignalType
+import config
+from mt5_connector import MT5Connector
+from data_puller import DataPuller
+from volume_profile import build_volume_profile, VolumeProfile
+from key_levels import KeyLevelBuilder, KeyLevels
+from footprint import FootprintBuilder, FootprintBar
+from delta import DeltaEngine, DeltaBar
+from signals import SignalDetector, Signal, SignalType
 
 log = logging.getLogger(__name__)
 

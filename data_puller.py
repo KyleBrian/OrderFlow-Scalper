@@ -10,7 +10,7 @@ from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass, field
 from typing import Optional, List, Tuple
 
-from . import config
+import config
 
 log = logging.getLogger(__name__)
 

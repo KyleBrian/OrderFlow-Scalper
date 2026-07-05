@@ -16,8 +16,8 @@ from dataclasses import dataclass
 from typing import List, Optional
 from enum import Enum
 
-from . import config
-from .footprint import FootprintBar
+import config
+from footprint import FootprintBar
 
 log = logging.getLogger(__name__)
 
