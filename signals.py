@@ -1,6 +1,7 @@
 """
 Signals Detector — Classify order flow signals from Strategy 1, Step 4.
-Absorption, Imbalance Stacking, Delta Divergence, Iceberg Detection.
+Absorption, Imbalance Stacking, Delta Divergence, Iceberg Detection, 
+Candle Imbalance (CRT), and ICT Order Blocks.
 """
 import numpy as np
 import pandas as pd
@@ -14,6 +15,12 @@ from .footprint import FootprintBar, FootprintBuilder, ImbalanceStack
 from .delta import DeltaEngine, Divergence
 from .key_levels import KeyLevels
 from .data_puller import DOMSnapshot
+from .candle_imbalance import CandleImbalanceDetector, CandleImbalance, ImbalanceDirection
+from .ict_order_blocks import OrderBlockDetector, OrderBlock, OrderBlockType
+from .ldp import LiquidityDeltaProfiler, LDPSignalType
+from .session_config import SessionManager
+from .loss_prevention import LossPreventionValidator
+from .trade_reasoner import TradeReasoner
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +31,12 @@ class SignalType(Enum):
     DELTA_DIVERGENCE = "delta_divergence"
     ICEBERG = "iceberg"
     EXHAUSTION = "exhaustion"
+    CANDLE_IMBALANCE = "candle_imbalance"
+    ORDER_BLOCK = "order_block"
+    LDP_ABSORPTION = "ldp_absorption"
+    LDP_EXHAUSTION = "ldp_exhaustion"
+    LDP_DIVERGENCE = "ldp_divergence"
+    LDP_REJECTION = "ldp_rejection"
 
 
 @dataclass
@@ -55,10 +68,16 @@ class SignalDetector:
         footprint_builder: FootprintBuilder,
         delta_engine: DeltaEngine,
         tick_size: float,
+        account_size_usd: float = 100.0,
     ):
         self.fp_builder = footprint_builder
         self.delta_engine = delta_engine
         self.tick_size = tick_size
+        self.candle_imbalance_detector = CandleImbalanceDetector(tick_size)
+        self.order_block_detector = OrderBlockDetector(tick_size)
+        self.ldp = LiquidityDeltaProfiler(tick_size=tick_size)
+        self.loss_prevention = LossPreventionValidator(tick_size=tick_size)
+        self.trade_reasoner = TradeReasoner(account_size_usd=account_size_usd)
 
     def scan_all(
         self,
@@ -108,7 +127,54 @@ class SignalDetector:
             iceberg_signals = self._detect_iceberg(tick_df, nearby_levels)
             signals.extend(iceberg_signals)
 
-        # Sort by confidence
+        # ── 6. Candle Imbalance Detection (CRT sniper setups) ──
+        imbalance_signals = self._detect_candle_imbalances(fp_bars, nearby_levels)
+        signals.extend(imbalance_signals)
+
+        # ── 7. ICT Order Block Detection ──
+        order_block_signals = self._detect_order_blocks(fp_bars, current_price, nearby_levels)
+        signals.extend(order_block_signals)
+
+        # ── 8. LDP (Liquidity Delta Profiler) Signals ──
+        from datetime import datetime
+        ldp_signals = self._detect_ldp_signals(fp_bars, nearby_levels, datetime.utcnow())
+        signals.extend(ldp_signals)
+
+        # ════════════════════════════════════════════════════════════
+        # SESSION-BASED CONFIDENCE BOOST (CRITICAL)
+        # ════════════════════════════════════════════════════════════
+        # FIRST: Check if we can trade in this session
+        # If NO (Asia/Dead Zone), return empty signal list immediately
+        can_trade = SessionManager.can_trade_now()
+        if not can_trade:
+            log.debug(f"Session blocked: {SessionManager.get_session_name()}. No signals allowed.")
+            return []
+
+        # SECOND: Apply session multiplier to all signals
+        for signal in signals:
+            base_conf = signal.confidence
+            boosted_conf = SessionManager.apply_session_boost(base_conf)
+            signal.confidence = boosted_conf
+            
+            if signal.confidence == 0.0:
+                # HARD BLOCK - remove this signal
+                signals.remove(signal)
+
+        # THIRD: Run loss prevention validator on remaining signals
+        filtered_signals = []
+        for signal in signals:
+            result = self.loss_prevention.validate(signal, bar_index=len(fp_bars) - 1, bars=fp_bars)
+            
+            if result.passed:
+                # Add loss prevention details to signal
+                signal.details["loss_prevention"] = result.filters_status
+                filtered_signals.append(signal)
+            else:
+                log.debug(f"Signal blocked by loss prevention: {result.reason}")
+
+        signals = filtered_signals
+
+        # Sort by confidence (session-boosted)
         signals.sort(key=lambda s: s.confidence, reverse=True)
         return signals
 
@@ -302,5 +368,163 @@ class SignalDetector:
                         "consistency": consistent_pct,
                     },
                 ))
+
+        return signals
+
+    # ── Candle Imbalance Detector (CRT) ────────────
+    def _detect_candle_imbalances(
+        self, fp_bars: List[FootprintBar], nearby_levels: List[float],
+    ) -> List[Signal]:
+        """
+        Detect CRT candle imbalance patterns for sniper entries.
+        High probability setup: volume on one side, close on opposite side.
+        """
+        signals = []
+        recent_bars = fp_bars[-5:] if len(fp_bars) > 5 else fp_bars
+
+        for fp_bar in recent_bars:
+            imbalance = self.candle_imbalance_detector.detect(fp_bar, fp_bars)
+            if not imbalance:
+                continue
+
+            # Check if imbalance is near a key level (confluence boost)
+            nearest_level = min(
+                nearby_levels,
+                key=lambda lv: abs(lv - imbalance.mid),
+                default=imbalance.mid,
+            )
+
+            direction = "long" if imbalance.direction == ImbalanceDirection.BULLISH else "short"
+            confidence = imbalance.imbalance_strength * 0.9
+
+            signals.append(Signal(
+                signal_type=SignalType.CANDLE_IMBALANCE,
+                direction=direction,
+                key_level=nearest_level,
+                confidence=confidence,
+                bar_time=fp_bar.bar_time,
+                details={
+                    "entry_level": imbalance.entry_level,
+                    "stop_loss": imbalance.stop_loss,
+                    "target_ratio": imbalance.target_ratio,
+                    "volume_ratio": imbalance.volume_ratio,
+                    "candle_high": imbalance.details.get("candle_high"),
+                    "candle_low": imbalance.details.get("candle_low"),
+                },
+            ))
+
+        return signals
+
+    # ── ICT Order Block Detector ───────────────────
+    def _detect_order_blocks(
+        self, fp_bars: List[FootprintBar], current_price: float, nearby_levels: List[float],
+    ) -> List[Signal]:
+        """
+        Detect ICT order blocks (smart money accumulation/distribution zones).
+        These are the zones where institutions accumulate before breakouts.
+        """
+        signals = []
+
+        # Scan for order blocks in recent history
+        order_blocks = self.order_block_detector.detect_order_blocks(fp_bars, lookback=20)
+        if not order_blocks:
+            return signals
+
+        # Find blocks being tested near current price
+        triggered_blocks = self.order_block_detector.find_triggered_blocks(
+            current_price, order_blocks, proximity_ticks=10
+        )
+
+        for ob in triggered_blocks:
+            # Determine entry direction based on block type
+            direction = "long" if ob.block_type == OrderBlockType.ACCUMULATION else "short"
+
+            # Confidence scales with block strength and how fresh it is
+            # Fresher blocks (fewer bars since breakout) = higher confidence
+            freshness = max(0, 1.0 - (ob.breakout_bars / 50.0))
+            confidence = (ob.strength * 0.8) + (freshness * 0.2)
+
+            signals.append(Signal(
+                signal_type=SignalType.ORDER_BLOCK,
+                direction=direction,
+                key_level=ob.mid,
+                confidence=min(confidence, 1.0),
+                bar_time=ob.breakout_time,
+                details={
+                    "block_high": ob.high,
+                    "block_low": ob.low,
+                    "block_type": ob.block_type.value,
+                    "strength": ob.strength,
+                    "formed_at": str(ob.formed_at),
+                    "consolidation_bars": ob.consolidation_bars,
+                    "breakout_bars": ob.breakout_bars,
+                    "volume_in_block": ob.volume_in_block,
+                },
+            ))
+
+        return signals
+
+    # ── LDP (Liquidity Delta Profiler) Detector ─────
+    def _detect_ldp_signals(self, fp_bars: List[FootprintBar], nearby_levels: List[float], utc_time) -> List[Signal]:
+        """
+        Detect institutional-grade LDP signals (ABS, EXH, DIV, REJ).
+        
+        These are the same zones and patterns that Lux Algo detects,
+        now integrated into our signal system.
+        """
+        signals = []
+        
+        if len(fp_bars) < 5:
+            return signals
+
+        # Get all LDP signals from the profiler
+        ldp_all_signals = self.ldp.get_all_signals(len(fp_bars) - 1)
+        
+        for zone, ldp_signal_type in ldp_all_signals:
+            # Map LDP signal type to our SignalType
+            signal_type_map = {
+                LDPSignalType.ABSORPTION: SignalType.LDP_ABSORPTION,
+                LDPSignalType.EXHAUSTION: SignalType.LDP_EXHAUSTION,
+                LDPSignalType.DIVERGENCE: SignalType.LDP_DIVERGENCE,
+                LDPSignalType.REJECTION: SignalType.LDP_REJECTION,
+            }
+            
+            signal_type = signal_type_map.get(ldp_signal_type, SignalType.LDP_ABSORPTION)
+            
+            # Determine direction based on zone type
+            # BSL (buy side) with ABS = long
+            # SSL (sell side) with ABS = short
+            if zone.zone_type == "bsl":
+                direction = "long"
+            else:  # ssl
+                direction = "short"
+
+            # Confidence based on zone health (fresher zones = higher confidence)
+            base_confidence = (zone.health / 100.0) * 0.9  # Max 90%
+            
+            # Session multiplier already applied in scan_all, so just use base
+            session_boost = SessionManager.get_confidence_multiplier(utc_time)
+            final_confidence = base_confidence * session_boost
+
+            signals.append(Signal(
+                signal_type=signal_type,
+                direction=direction,
+                key_level=zone.mid,
+                confidence=final_confidence,
+                bar_time=fp_bars[-1].bar_time,
+                details={
+                    "zone_type": zone.zone_type,
+                    "zone_high": zone.high,
+                    "zone_low": zone.low,
+                    "zone_health": zone.health,
+                    "zone_age": len(fp_bars) - zone.left,
+                    "touched_count": zone.touched_count,
+                    "volume_in_zone": zone.volume_in_zone,
+                    "ldp_signal_type": ldp_signal_type.value,
+                    "entry_level": zone.mid + (2 * self.tick_size) if direction == "long" else zone.mid - (2 * self.tick_size),
+                    "stop_loss": zone.low if direction == "long" else zone.high,
+                    "target_ratio": 2.0,  # 1:2 R:R
+                },
+            ))
 
         return signals

@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>🤖 Self-Playing AGI Arena</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: radial-gradient(circle, #0a0a2e, #000);
+    font-family: 'Courier New', monospace;
+    color: #fff;
+    overflow: hidden;
+    height: 100vh;
+  }
+  
+  #gameContainer {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 15px;
+    height: 100vh;
+  }
+  
+  h1 {
+    font-size: 1.8em;
+    background: linear-gradient(90deg, #00ffea, #ff00ea);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    text-shadow: 0 0 20px rgba(0,255,234,0.5);
+    margin-bottom: 10px;
+  }
+  
+  #statsBar {
+    display: flex;
+    gap: 20px;
+    background: rgba(255,255,255,0.05);
+    padding: 10px 25px;
+    border-radius: 10px;
+    border: 1px solid #00ffea;
+    margin-bottom: 10px;
+    font-size: 0.9em;
+  }
+  
+  .stat { color: #00ffea; }
+  .stat span { color: #ffea00; font-weight: bold; }
+  
+  #arena {
+    border: 2px solid #00ffea;
+    box-shadow: 0 0 30px #00ffea, inset 0 0 30px rgba(0,255,234,0.1);
+    border-radius: 10px;
+    background: #000;
+  }
+  
+  #controls {
+    margin-top: 10px;
+    display: flex;
+    gap: 15px;
+    align-items: center;
+  }
+  
+  button {
+    background: linear-gradient(135deg, #00ffea, #ff00ea);
+    color: #000;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 5px;
+    font-weight: bold;
+    cursor: pointer;
+    font-family: inherit;
+    transition: transform 0.2s;
+  }
+  button:hover { transform: scale(1.05); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  
+  input[type=range] { width: 150px; }
+  
+  #log {
+    margin-top: 10px;
+    width: 800px;
+    height: 80px;
+    background: rgba(0,0,0,0.6);
+    border: 1px solid #ff00ea;
+    border-radius: 5px;
+    padding: 8px;
+    font-size: 0.75em;
+    overflow-y: auto;
+    color: #aaa;
+  }
+  .log-entry { margin: 2px 0; }
+  .log-attack { color: #ff4444; }
+  .log-heal { color: #44ff44; }
+  .log-move { color: #44aaff; }
+</style>
+</head>
+<body>
+<div id="gameContainer">
+  <h1>⚡ SELF-PLAYING AGI ARENA ⚡</h1>
+  
+  <div id="statsBar">
+    <div class="stat">Round: <span id="round">0</span></div>
+    <div class="stat">Blue Agent: <span id="blueHp">100</span>❤️</div>
+    <div class="stat">Red Agent: <span id="redHp">100</span>❤️</div>
+    <div class="stat">Decisions: <span id="decisions">0</span></div>
+  </div>
+  
+  <canvas id="arena" width="800" height="400"></canvas>
+  
+  <div id="controls">
+    <button id="startBtn">▶ START</button>
+    <button id="pauseBtn">⏸ PAUSE</button>
+    <button id="resetBtn">🔄 RESET</button>
+    <label>Speed: <input type="range" id="speed" min="50" max="1000" value="500"></label>
+  </div>
+  
+  <div id="log"></div>
+</div>
+
+<script>
+// ============ GAME CONFIG ============
+const W = 800, H = 400;
+const canvas = document.getElementById('arena');
+const ctx = canvas.getContext('2d');
+
+// ============ AGENT CLASS (Pure Logic AI) ============
+class Agent {
+  constructor(name, x, y, color, strategy) {
+    this.name = name;
+    this.x = x;
+    this.y = y;
+    this.color = color;
+    this.hp = 100;
+    this.maxHp = 100;
+    this.energy = 100;
+    this.strategy = strategy; // 'aggressive', 'defensive', 'balanced', 'tactical'
+    this.cooldown = 0;
+    this.vx = 0;
+    this.vy = 0;
+    this.radius = 18;
+    this.thoughts = '';
+    this.memory = []; // remembers opponent patterns
+  }
+  
+  // ====== THE "AGI" BRAIN — Decision Logic ======
+  think(opponent) {
+    const dist = Math.hypot(opponent.x - this.x, opponent.y - this.y);
+    const hpRatio = this.hp / this.maxHp;
+    const oppHpRatio = opponent.hp / opponent.maxHp;
+    
+    // Pattern analysis from memory
+    const recentAttacks = this.memory.filter(m => m === 'attacked').length;
+    const oppIsAggressive = recentAttacks > 2;
+    
+    let decision = { action: 'move', vx: 0, vy: 0, reason: '' };
+    
+    // === STRATEGY-BASED LOGIC ===
+    switch(this.strategy) {
+      case 'aggressive':
+        if (dist > 60 && this.energy > 30) {
+          decision = { action: 'chase', reason: 'Press the attack!' };
+        } else if (dist <= 60 && this.cooldown === 0) {
+          decision = { action: 'attack', reason: 'Strike now!' };
+        } else if (this.energy < 20) {
+          decision = { action: 'retreat', reason: 'Recharge!' };
+        }
+        break;
+        
+      case 'defensive':
+        if (hpRatio < 0.3 && this.cooldown === 0) {
+          decision = { action: 'heal', reason: 'Emergency heal!' };
+        } else if (dist < 40 && oppHpRatio > 0.6) {
+          decision = { action: 'retreat', reason: 'Too dangerous, fall back' };
+        } else if (dist > 100) {
+          decision = { action: 'chase', reason: 'Closing distance' };
+        } else if (dist <= 60 && this.cooldown === 0 && hpRatio > 0.5) {
+          decision = { action: 'attack', reason: 'Counter-attack!' };
+        }
+        break;
+        
+      case 'tactical':
+        // Smart positioning — circles around opponent
+        if (this.cooldown === 0 && dist <= 70 && dist >= 30) {
+          decision = { action: 'attack', reason: 'Optimal range hit!' };
+        } else if (dist > 70) {
+          const angle = Math.atan2(opponent.y - this.y, opponent.x - this.x);
+          decision = { 
+            action: 'circle', 
+            vx: Math.cos(angle + Math.PI/2) * 2,
+            vy: Math.sin(angle + Math.PI/2) * 2,
+            reason: 'Flanking maneuver' 
+          };
+        } else if (dist < 30) {
+          decision = { action: 'retreat', reason: 'Disengage to reposition' };
+        } else if (hpRatio < 0.4 && this.energy > 50) {
+          decision = { action: 'heal', reason: 'Tactical recovery' };
+        }
+        break;
+        
+      case 'balanced':
+      default:
+        if (oppHpRatio < 0.3 && this.cooldown === 0) {
+          decision = { action: 'attack', reason: 'Finish them!' };
+        } else if (hpRatio < 0.4 && this.cooldown === 0) {
+          decision = { action: 'heal', reason: 'Self-preservation' };
+        } else if (dist > 80 && this.energy > 20) {
+          decision = { action: 'chase', reason: 'Engage target' };
+        } else if (dist <= 50 && this.cooldown === 0) {
+          decision = { action: 'attack', reason: 'Strike!' };
+        } else if (oppIsAggressive) {
+          decision = { action: 'retreat', reason: 'Avoid predictable attack' };
+        }
+    }
+    
+    this.thoughts = decision.reason;
+    return decision;
+  }
+  
+  // ====== EXECUTE DECISION ======
+  update(opponent) {
+    this.cooldown = Math.max(0, this.cooldown - 1);
+    
+    const decision = this.think(opponent);
+    const dist = Math.hypot(opponent.x - this.x, opponent.y - this.y);
+    
+    switch(decision.action) {
+      case 'chase':
+        const angle = Math.atan2(opponent.y - this.y, opponent.x - this.x);
+        this.vx = Math.cos(angle) * 2.5;
+        this.vy = Math.sin(angle) * 2.5;
+        break;
+      case 'retreat':
+        const awayAngle = Math.atan2(this.y - opponent.y, this.x - opponent.x);
+        this.vx = Math.cos(awayAngle) * 2;
+        this.vy = Math.sin(awayAngle) * 2;
+        break;
+      case 'circle':
+        this.vx = decision.vx || 0;
+        this.vy = decision.vy || 0;
+        break;
+      case 'attack':
+        opponent.hp -= 15;
+        this.energy -= 15;
+        this.cooldown = 30;
+        this.memory.push('attacked');
+        if (this.memory.length > 5) this.memory.shift();
+        logAction(this.name, `⚔️ ATTACKED ${opponent.name}!`, 'log-attack');
+        // Knockback effect
+        const kbAngle = Math.atan2(opponent.y - this.y, opponent.x - this.x);
+        opponent.vx = Math.cos(kbAngle) * 4;
+        opponent.vy = Math.sin(kbAngle) * 4;
+        break;
+      case 'heal':
+        this.hp = Math.min(this.maxHp, this.hp + 20);
+        this.energy -= 30;
+        this.cooldown = 40;
+        logAction(this.name, `💊 HEALED +20 HP`, 'log-heal');
+        break;
+      case 'move':
+      default:
+        this.vx *= 0.85;
+        this.vy *= 0.85;
+    }
+    
+    // Apply velocity
+    this.x += this.vx;
+    this.y += this.vy;
+    
+    // Boundary clamp
+    this.x = Math.max(this.radius, Math.min(W - this.radius, this.x));
+    this.y = Math.max(this.radius, Math.min(H - this.radius, this.y));
+    
+    // Passive regen
+    this.energy = Math.min(100, this.energy + 0.3);
+    
+    // Death check
+    if (this.hp <= 0) {
+      logAction(this.name, `💀 DESTROYED!`, 'log-attack');
+      return true; // dead
+    }
+    return false;
+  }
+  
+  draw() {
+    // Glow
+    ctx.shadowBlur = 20;
+    ctx.shadowColor = this.color;
+    
+    // Body
+    ctx.fillStyle = this.color;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // HP Bar
+    const barW = 40;
+    const hpRatio = this.hp / this.maxHp;
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#333';
+    ctx.fillRect(this.x - barW/2, this.y - 30, barW, 5);
+    ctx.fillStyle = hpRatio > 0.5 ? '#00ff00' : hpRatio > 0.25 ? '#ffaa00' : '#ff0000';
+    ctx.fillRect(this.x - barW/2, this.y - 30, barW * hpRatio, 5);
+    
+    // Energy bar
+    ctx.fillStyle = '#222';
+    ctx.fillRect(this.x - barW/2, this.y - 23, barW, 3);
+    ctx.fillStyle = '#00ddff';
+    ctx.fillRect(this.x - barW/2, this.y - 23, barW * (this.energy/100), 3);
+    
+    // Name
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 11px Courier';
+    ctx.textAlign = 'center';
+    ctx.fillText(this.name, this.x, this.y + 35);
+    
+    // Strategy tag
+    ctx.fillStyle = this.color;
+    ctx.font = '9px Courier';
+    ctx.fillText(`[${this.strategy}]`, this.x, this.y + 47);
+  }
+}
+
+// ============ GAME STATE ============
+let blue = new Agent('BLUE-α', 150, 200, '#00aaff', 'tactical');
+let red = new Agent('RED-Ω', 650, 200, '#ff4444', 'aggressive');
+let round = 0;
+let decisions = 0;
+let running = false;
+let animId;
+let roundDelay = 0;
+
+function logAction(agent, msg, cls) {
+  const log = document.getElementById('log');
+  const entry = document.createElement('div');
+  entry.className = 'log-entry ' + cls;
+  entry.textContent = `[${agent}] ${msg}`;
+  log.appendChild(entry);
+  log.scrollTop = log.scrollHeight;
+  // Keep only last 20
+  while (log.children.length > 20) log.removeChild(log.firstChild);
+}
+
+// ============ GAME LOOP ============
+function gameLoop() {
+  if (!running) return;
+  
+  // Clear with trail effect
+  ctx.fillStyle = 'rgba(0,0,0,0.15)';
+  ctx.fillRect(0, 0, W, H);
+  
+  // Grid background
+  ctx.strokeStyle = 'rgba(0,255,234,0.05)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i < W; i += 40) {
+    ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, H); ctx.stroke();
+  }
+  for (let i = 0; i < H; i += 40) {
+    ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(W, i); ctx.stroke();
+  }
+  
+  // Update agents
+  const blueDead = blue.update(red);
+  const redDead = red.update(blue);
+  
+  decisions += 2;
+  
+  // Collision bounce
+  const dist = Math.hypot(blue.x - red.x, blue.y - red.y);
+  if (dist < blue.radius + red.radius) {
+    const angle = Math.atan2(red.y - blue.y, red.x - blue.x);
+    blue.x -= Math.cos(angle) * 2;
+    blue.y -= Math.sin(angle) * 2;
+    red.x += Math.cos(angle) * 2;
+    red.y += Math.sin(angle) * 2;
+  }
+  
+  // Draw
+  blue.draw();
+  red.draw();
+  
+  // Draw thoughts (what the AGI is "thinking")
+  ctx.font = 'italic 10px Courier';
+  ctx.fillStyle = blue.color;
+  ctx.fillText(`💭 ${blue.thoughts}`, blue.x, blue.y - 50);
+  ctx.fillStyle = red.color;
+  ctx.fillText(`💭 ${red.thoughts}`, red.x, red.y - 50);
+  
+  // Update HUD
+  document.getElementById('round').textContent = ++round;
+  document.getElementById('blueHp').textContent = Math.max(0, Math.floor(blue.hp));
+  document.getElementById('redHp').textContent = Math.max(0, Math.floor(red.hp));
+  document.getElementById('decisions').textContent = decisions;
+  
+  // Winner check
+  if (blueDead || redDead) {
+    const winner = blueDead ? 'RED-Ω' : 'BLUE-α';
+    const loser = blueDead ? blue : red;
+    loser.x = -100; // off-screen
+    logAction('SYSTEM', `🏆 ${winner} WINS! New round starting...`, 'log-heal');
+    
+    setTimeout(resetRound, 2000);
+    running = false;
+  }
+  
+  const speed = 1010 - document.getElementById('speed').value;
+  setTimeout(() => { animId = requestAnimationFrame(gameLoop); }, speed);
+}
+
+function resetRound() {
+  blue = new Agent('BLUE-α', 150, 200, '#00aaff', 
+    ['tactical','balanced','defensive'][Math.floor(Math.random()*3)]);
+  red = new Agent('RED-Ω', 650, 200, '#ff4444', 
+    ['aggressive','tactical','balanced'][Math.floor(Math.random()*3)]);
+  round = 0;
+  document.getElementById('log').innerHTML = '';
+  running = true;
+  gameLoop();
+}
+
+// ============ CONTROLS ============
+document.getElementById('startBtn').onclick = () => {
+  if (!running) { running = true; gameLoop(); }
+};
+document.getElementById('pauseBtn').onclick = () => {
+  running = false;
+};
+document.getElementById('resetBtn').onclick = () => {
+  running = false;
+  cancelAnimationFrame(animId);
+  resetRound();
+};
+
+// Initial draw
+ctx.fillStyle = '#000';
+ctx.fillRect(0,0,W,H);
+ctx.fillStyle = '#00ffea';
+ctx.font = '20px Courier';
+ctx.textAlign = 'center';
+ctx.fillText('Press START to watch the AGI battle!', W/2, H/2);
+</script>
+</body>
+</html>

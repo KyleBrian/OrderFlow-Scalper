@@ -123,6 +123,19 @@ JOURNAL_CSV: str = "trade_journal.csv"
 JOURNAL_DB: str = "trade_journal.db"
 
 # ─────────────────────────────────────────────
+# CANDLE IMBALANCE (CRT) - NEW FEATURE
+# ─────────────────────────────────────────────
+CANDLE_IMBALANCE_VOLUME_RATIO_THRESHOLD: float = 0.60  # one side > 60% = imbalance
+CANDLE_IMBALANCE_MIN_CONFIRMATION: int = 2  # require 2+ candles with imbalance
+
+# ─────────────────────────────────────────────
+# ICT ORDER BLOCKS - NEW FEATURE
+# ─────────────────────────────────────────────
+CONSOLIDATION_MIN_VOLUME: int = 100  # min volume to qualify as consolidation
+ORDER_BLOCK_LOOKBACK: int = 20  # scan last 20 bars for blocks
+ORDER_BLOCK_PROXIMITY_TICKS: int = 10  # within 10 ticks = triggered
+
+# ─────────────────────────────────────────────
 # FOREX HEURISTIC FALLBACK
 # ─────────────────────────────────────────────
 USE_HEURISTIC_DIRECTION: bool = False  # auto-enabled if TICK_FLAG_BUY/SELL absent
