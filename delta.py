@@ -7,8 +7,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
-from . import config
-from .footprint import FootprintBar
+import config
+from footprint import FootprintBar
 
 log = logging.getLogger(__name__)
 

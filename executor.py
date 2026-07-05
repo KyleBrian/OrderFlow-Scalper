@@ -10,7 +10,7 @@ from typing import List, Optional
 
 import MetaTrader5 as mt5
 
-from . import config
+import config
 
 log = logging.getLogger(__name__)
 

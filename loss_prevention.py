@@ -22,8 +22,8 @@ from typing import Optional, List
 from datetime import datetime
 import logging
 
-from . import config
-from .session_config import SessionManager
+import config
+from session_config import SessionManager
 
 logger = logging.getLogger(__name__)
 

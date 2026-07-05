@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, time
 from typing import List, Optional, Tuple
 
-from . import config
+import config
 
 log = logging.getLogger(__name__)
 

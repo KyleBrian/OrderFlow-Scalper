@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
-from . import config
+import config
 
 log = logging.getLogger(__name__)
 

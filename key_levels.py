@@ -10,9 +10,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 
-from . import config
-from .data_puller import DataPuller, BarData
-from .volume_profile import VolumeProfile, build_volume_profile
+import config
+from data_puller import DataPuller, BarData
+from volume_profile import VolumeProfile, build_volume_profile
 
 log = logging.getLogger(__name__)
 
