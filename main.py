@@ -30,7 +30,7 @@ from scanner import Scanner
 from session_config import SessionManager
 from loss_prevention import LossPreventionValidator
 from trade_reasoner import TradeReasoner
-from chart import ChartGenerator
+from chart import build_strategy_chart
 
 # ── Logging Setup ──────────────────────────────────
 logging.basicConfig(
@@ -63,7 +63,6 @@ class OrderFlowScalper:
         self.session_manager: SessionManager = None     # type: ignore
         self.loss_prevention: LossPreventionValidator = None  # type: ignore
         self.trade_reasoner: TradeReasoner = None      # type: ignore
-        self.chart_gen: ChartGenerator = None           # type: ignore
 
     # ── Start ──────────────────────────────────────
     def start(self):
@@ -100,8 +99,7 @@ class OrderFlowScalper:
         self.session_manager = SessionManager()
         self.loss_prevention = LossPreventionValidator(tick_size=spec.point)
         self.trade_reasoner = TradeReasoner(account_size_usd=config.INITIAL_ACCOUNT_SIZE)
-        self.chart_gen = ChartGenerator()
-        log.info("Advanced components initialized: SessionMgr, LossPrevention, TradeReasoner, ChartGen")
+        log.info("Advanced components initialized: SessionMgr, LossPrevention, TradeReasoner")
 
         # 5. Reset risk for today
         acct = self.connector.get_account_state()
@@ -223,33 +221,30 @@ class OrderFlowScalper:
         Shows: candlesticks, volume profile, footprint, delta, signals, key levels.
         """
         log.info("[ChartGen] Started - Generating interactive charts every %d seconds", 
-                 config.CHART_GENERATION_INTERVAL_SECS if hasattr(config, 'CHART_GENERATION_INTERVAL_SECS') else 300)
+                 getattr(config, 'CHART_GENERATION_INTERVAL_SECS', 300))
         chart_count = 0
         try:
             while not self._shutdown.is_set():
                 try:
                     chart_count += 1
-                    # Generate chart every 5 minutes (or config interval)
                     interval = getattr(config, 'CHART_GENERATION_INTERVAL_SECS', 300)
                     
-                    # Only generate if we have the chart generator
-                    if self.chart_gen and hasattr(self.chart_gen, 'generate_chart'):
-                        log.info("[ChartGen] Generating chart #%d...", chart_count)
-                        try:
-                            self.chart_gen.generate_chart(
-                                symbol=config.SYMBOL,
-                                timeframe=config.TIMEFRAME_PRIMARY,
-                                bars=100,
-                                output_html="chart.html"
-                            )
-                            log.info("[ChartGen] Chart saved to chart.html")
-                        except Exception as e:
-                            log.warning("[ChartGen] Chart generation failed: %s", e)
+                    log.info("[ChartGen] Generating chart #%d...", chart_count)
+                    try:
+                        # Call the build_strategy_chart function directly
+                        build_strategy_chart(
+                            bar_count=100,
+                            output_html="strategy_chart.html",
+                            auto_open=False  # Don't auto-open in background thread
+                        )
+                        log.info("[ChartGen] Chart saved to strategy_chart.html")
+                    except Exception as e:
+                        log.warning("[ChartGen] Chart generation failed: %s", e)
                     
                     self._shutdown.wait(timeout=interval)
                 except Exception as e:
                     log.exception("[ChartGen] Error in chart cycle %d: %s", chart_count, e)
-                    self._shutdown.wait(timeout=60)  # Retry after 1 min on error
+                    self._shutdown.wait(timeout=60)
         finally:
             log.info("[ChartGen] Stopped after %d chart generations", chart_count)
 
